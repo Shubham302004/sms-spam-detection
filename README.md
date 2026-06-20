@@ -1,12 +1,6 @@
 # 📱 SMS Spam Detector
 
 A machine learning web app that classifies SMS messages as **Spam** or **Ham (Not Spam)** in real time, with a confidence score.
-
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![Flask](https://img.shields.io/badge/Flask-3.0-black)
-![scikit-learn](https://img.shields.io/badge/scikit--learn-ML-orange)
-![License](https://img.shields.io/badge/License-MIT-green)
-
 ---
 
 ## 🖥️ Demo
