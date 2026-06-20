@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMS Spam Detector</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        primary: "#111827"
+      }
+    }
+  }
+}
+</script>
+</head>
+
+<body class="h-screen overflow-hidden bg-gray-100 flex items-center justify-center">
+
+<main class="w-full max-w-6xl h-[90vh] bg-white rounded-2xl shadow-xl flex flex-col">
+
+<!-- HEADER -->
+<header class="flex items-center justify-between px-6 py-4 border-b">
+  <div class="flex items-center gap-2 font-semibold text-lg">
+    <span class="material-icons-round">security</span>
+    SMS Spam Detector
+  </div>
+</header>
+
+<!-- CONTENT -->
+<div class="flex flex-1 overflow-hidden">
+
+<!-- LEFT -->
+<section class="w-1/2 p-10 flex flex-col">
+  <h1 class="text-4xl font-bold mb-2">Spam Detection AI</h1>
+  <p class="text-gray-500 mb-6">
+    Analyze any SMS message instantly to detect potential threats or spam content.
+  </p>
+
+  <textarea
+    id="message"
+    maxlength="1000"
+    class="w-full h-48 p-6 rounded-2xl border text-lg resize-none focus:outline-none focus:ring-2 focus:ring-black"
+    placeholder="Paste your SMS message here to analyze..."></textarea>
+
+  <div class="flex items-center justify-between mt-1">
+    <div class="flex gap-3">
+      <button onclick="setSpam()" class="px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition">Spam Example</button>
+      <button onclick="setHam()"  class="px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition">Ham Example</button>
+    </div>
+    <span id="char-count" class="text-xs text-gray-400">0 / 1000</span>
+  </div>
+
+  <button
+    id="analyze-btn"
+    class="mt-8 py-4 rounded-full bg-black text-white text-lg font-semibold shadow-lg hover:bg-gray-800 transition disabled:opacity-50">
+    Analyze Message
+  </button>
+</section>
+
+<!-- RIGHT -->
+<section class="w-1/2 border-l p-10 flex flex-col gap-6 overflow-hidden">
+
+  <!-- RESULT -->
+  <div id="result-card"
+       class="flex-1 rounded-2xl border flex flex-col items-center justify-center text-center p-6">
+    <span class="material-icons-round text-4xl mb-3 text-gray-400">analytics</span>
+    <h3 id="result-title" class="text-xl font-semibold mb-2">Ready to Analyze</h3>
+    <p id="result-text" class="text-gray-500">
+      Enter a message on the left and hit analyze to see the prediction result here.
+    </p>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="flex items-center justify-between text-sm text-gray-500">
+    <span class="font-semibold">RECENT HISTORY</span>
+    <button onclick="clearHistory()" class="text-black hover:underline">Clear All</button>
+  </div>
+
+  <div class="flex-1 overflow-y-auto border rounded-2xl">
+    <ul id="history"></ul>
+  </div>
+
+</section>
+</div>
+</main>
+
+<!-- SCRIPT -->
+<script>
+// -----------------------------------------------------------------------
+// Config — change API_BASE_URL if your backend runs on a different host
+// -----------------------------------------------------------------------
+const API_BASE_URL = "http://127.0.0.1:5000";
+
+// -----------------------------------------------------------------------
+// DOM refs
+// -----------------------------------------------------------------------
+const analyzeBtn   = document.getElementById("analyze-btn");
+const messageInput = document.getElementById("message");
+const resultTitle  = document.getElementById("result-title");
+const resultText   = document.getElementById("result-text");
+const resultCard   = document.getElementById("result-card");
+const historyList  = document.getElementById("history");
+const charCount    = document.getElementById("char-count");
+
+// -----------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------
+
+/** Safely escape a string for insertion into the DOM (prevents XSS). */
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function setSpam() {
+  messageInput.value = "Congratulations! You've won ₹50,000 cash prize. Click here to claim now.";
+  updateCharCount();
+}
+
+function setHam() {
+  messageInput.value = "Hey mom, I'll be late for dinner tonight. Don't wait up for me.";
+  updateCharCount();
+}
+
+function clearHistory() {
+  historyList.innerHTML = "";
+}
+
+function updateCharCount() {
+  charCount.textContent = `${messageInput.value.length} / 1000`;
+}
+
+function setResultState(title, body, colorClass) {
+  resultTitle.textContent = title;
+  resultTitle.className   = `text-2xl font-bold ${colorClass}`;
+  resultText.textContent  = body;
+}
+
+// -----------------------------------------------------------------------
+// Events
+// -----------------------------------------------------------------------
+messageInput.addEventListener("input", updateCharCount);
+
+analyzeBtn.addEventListener("click", async () => {
+  const msg = messageInput.value.trim();
+  if (!msg) {
+    alert("Please enter a message to analyze.");
+    return;
+  }
+
+  analyzeBtn.disabled  = true;
+  setResultState("Analyzing…", "Please wait…", "text-gray-500");
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: msg }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Server error (${res.status})`);
+    }
+
+    const data = await res.json();
+    const isSpam     = data.prediction === "Spam";
+    const colorClass = isSpam ? "text-red-500" : "text-green-500";
+
+    setResultState(
+      isSpam ? "🚨 Spam Detected" : "✅ Looks Safe (Ham)",
+      `Confidence: ${data.confidence}%`,
+      colorClass
+    );
+
+    // Append to history — use escapeHtml to prevent XSS
+    const li = document.createElement("li");
+    li.className = "p-4 border-b text-sm";
+    li.innerHTML = `
+      <span class="${colorClass} font-bold">${escapeHtml(data.prediction)}</span>
+      <p class="text-gray-600 mt-1">${escapeHtml(msg.slice(0, 80))}${msg.length > 80 ? "…" : ""}</p>
+    `;
+    historyList.prepend(li);
+
+  } catch (err) {
+    setResultState("Error", err.message || "Could not reach the backend.", "text-red-400");
+  } finally {
+    analyzeBtn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>

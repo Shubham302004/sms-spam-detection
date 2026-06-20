@@ -1,0 +1,9 @@
+flask
+flask-cors
+joblib
+scikit-learn
+numpy
+pandas
+nltk
+matplotlib
+seaborn
