@@ -7,15 +7,10 @@ Env vars:
 """
 
 import os
-import string
-import warnings
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import joblib
-from sklearn.exceptions import InconsistentVersionWarning
-
-warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -65,11 +60,18 @@ def predict():
     if not model or not vectorizer:
         return jsonify({"error": "Model or vectorizer not loaded on the server."}), 503
 
+    # NOTE: `request.get_json` also accepts JSON arrays/strings/numbers, so the
+    # payload must be checked for being an object before calling .get() on it —
+    # otherwise a list body raised AttributeError and returned HTTP 500.
     data = request.get_json(force=True, silent=True)
-    if not data:
+    if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body."}), 400
 
-    message = data.get("message", "").strip()
+    message = data.get("message", "")
+    if not isinstance(message, str):
+        return jsonify({"error": "Field 'message' must be a string."}), 400
+
+    message = message.strip()
 
     if not message:
         return jsonify({"error": "No message provided."}), 400

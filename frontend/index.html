@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SMS Spam Detector</title>
 
+<!-- NOTE: the Play CDN is for demos only — it generates styles in the browser.
+     For production, build Tailwind with the CLI and ship a static CSS file. -->
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
 
@@ -43,9 +45,11 @@ tailwind.config = {
     Analyze any SMS message instantly to detect potential threats or spam content.
   </p>
 
+  <label for="message" class="sr-only">Message to analyze</label>
   <textarea
     id="message"
     maxlength="1000"
+    aria-describedby="char-count"
     class="w-full h-48 p-6 rounded-2xl border text-lg resize-none focus:outline-none focus:ring-2 focus:ring-black"
     placeholder="Paste your SMS message here to analyze..."></textarea>
 
@@ -69,6 +73,7 @@ tailwind.config = {
 
   <!-- RESULT -->
   <div id="result-card"
+       role="status" aria-live="polite"
        class="flex-1 rounded-2xl border flex flex-col items-center justify-center text-center p-6">
     <span class="material-icons-round text-4xl mb-3 text-gray-400">analytics</span>
     <h3 id="result-title" class="text-xl font-semibold mb-2">Ready to Analyze</h3>
@@ -94,9 +99,17 @@ tailwind.config = {
 <!-- SCRIPT -->
 <script>
 // -----------------------------------------------------------------------
-// Config — change API_BASE_URL if your backend runs on a different host
+// Config — override without editing this file by appending ?api=<origin>,
+// e.g. index.html?api=http://192.168.0.10:5000
 // -----------------------------------------------------------------------
-const API_BASE_URL = "http://127.0.0.1:5000";
+const API_BASE_URL = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:5000";
+
+// Abort the request if the backend does not answer within this many ms.
+const REQUEST_TIMEOUT_MS = 15000;
+
+// History lives in this browser only (localStorage) and is capped at LIMIT items.
+const HISTORY_KEY = "spam-detector-history";
+const HISTORY_LIMIT = 20;
 
 // -----------------------------------------------------------------------
 // DOM refs
@@ -105,7 +118,6 @@ const analyzeBtn   = document.getElementById("analyze-btn");
 const messageInput = document.getElementById("message");
 const resultTitle  = document.getElementById("result-title");
 const resultText   = document.getElementById("result-text");
-const resultCard   = document.getElementById("result-card");
 const historyList  = document.getElementById("history");
 const charCount    = document.getElementById("char-count");
 
@@ -130,7 +142,57 @@ function setHam() {
   updateCharCount();
 }
 
+// -----------------------------------------------------------------------
+// History (kept in localStorage so a refresh does not lose it)
+// -----------------------------------------------------------------------
+function readHistory() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY));
+    return Array.isArray(stored) ? stored : [];
+  } catch {
+    return []; // corrupted or unavailable storage — start fresh
+  }
+}
+
+function writeHistory(items) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_LIMIT)));
+  } catch {
+    /* storage full or blocked — the in-memory UI still works */
+  }
+}
+
+function renderHistoryItem(item) {
+  const isSpam = item.prediction === "Spam";
+  const colorClass = isSpam ? "text-red-500" : "text-green-500";
+  const li = document.createElement("li");
+  li.className = "p-4 border-b text-sm";
+  li.innerHTML = `
+    <span class="${colorClass} font-bold">${escapeHtml(item.prediction)}</span>
+    <span class="text-gray-400 float-right">${escapeHtml(String(item.confidence))}%</span>
+    <p class="text-gray-600 mt-1">${escapeHtml(item.text)}</p>
+  `;
+  return li;
+}
+
+function addHistoryEntry(prediction, confidence, text) {
+  const items = readHistory();
+  items.unshift({
+    prediction,
+    confidence,
+    text: text.length > 80 ? text.slice(0, 80) + "…" : text,
+  });
+  writeHistory(items);
+  historyList.prepend(renderHistoryItem(items[0]));
+}
+
+function loadHistory() {
+  historyList.innerHTML = "";
+  readHistory().forEach((item) => historyList.appendChild(renderHistoryItem(item)));
+}
+
 function clearHistory() {
+  writeHistory([]);
   historyList.innerHTML = "";
 }
 
@@ -152,18 +214,23 @@ messageInput.addEventListener("input", updateCharCount);
 analyzeBtn.addEventListener("click", async () => {
   const msg = messageInput.value.trim();
   if (!msg) {
-    alert("Please enter a message to analyze.");
+    setResultState("Nothing to analyze", "Type or paste a message on the left first.", "text-amber-500");
+    messageInput.focus();
     return;
   }
 
-  analyzeBtn.disabled  = true;
+  analyzeBtn.disabled = true;
   setResultState("Analyzing…", "Please wait…", "text-gray-500");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
     const res = await fetch(`${API_BASE_URL}/predict`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: msg }),
+      signal: controller.signal,
     });
 
     if (!res.ok) {
@@ -181,21 +248,23 @@ analyzeBtn.addEventListener("click", async () => {
       colorClass
     );
 
-    // Append to history — use escapeHtml to prevent XSS
-    const li = document.createElement("li");
-    li.className = "p-4 border-b text-sm";
-    li.innerHTML = `
-      <span class="${colorClass} font-bold">${escapeHtml(data.prediction)}</span>
-      <p class="text-gray-600 mt-1">${escapeHtml(msg.slice(0, 80))}${msg.length > 80 ? "…" : ""}</p>
-    `;
-    historyList.prepend(li);
-
+    // renderHistoryItem escapes every field, so message text cannot inject HTML
+    addHistoryEntry(data.prediction, data.confidence, msg);
   } catch (err) {
-    setResultState("Error", err.message || "Could not reach the backend.", "text-red-400");
+    const failure =
+      err.name === "AbortError"
+        ? `Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s — is the backend running on ${API_BASE_URL}?`
+        : err.message || "Could not reach the backend.";
+    setResultState("Error", failure, "text-red-400");
   } finally {
+    clearTimeout(timer);
     analyzeBtn.disabled = false;
   }
 });
+
+// Restore saved history and sync the character counter on first paint.
+loadHistory();
+updateCharCount();
 </script>
 
 </body>

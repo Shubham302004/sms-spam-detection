@@ -1,9 +1,10 @@
-flask
-flask-cors
-joblib
-scikit-learn
-numpy
-pandas
-nltk
-matplotlib
-seaborn
+# Runtime dependencies for backend/app.py
+#
+# Versions are pinned: backend/spam_model.pkl and backend/vectorizer.pkl are
+# scikit-learn pickles and are only guaranteed to load under this exact
+# scikit-learn version. Re-run notebooks/spam_detection.ipynb after a bump.
+Flask==3.1.3
+flask-cors==6.0.5
+joblib==1.5.3
+scikit-learn==1.9.0
+numpy==2.4.6
