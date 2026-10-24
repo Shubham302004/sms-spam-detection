@@ -1,0 +1,6 @@
+.git
+.github
+notebooks
+tests
+requirements-dev.txt
+__pycache__

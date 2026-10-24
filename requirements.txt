@@ -8,3 +8,4 @@ flask-cors==6.0.5
 joblib==1.5.3
 scikit-learn==1.9.0
 numpy==2.4.6
+psycopg2-binary==2.9.10
