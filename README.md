@@ -24,14 +24,14 @@ spam-detector-app/
 │   ├── spam_detection.ipynb # Model training, evaluation & artifact export
 │   └── spam.csv             # UCI SMS Spam Collection dataset
 ├── tests/
-│   └── test_api.py          # API contract tests (25 cases)
+│   └── test_api.py          # API contract & integration tests (29 cases)
 ├── .github/workflows/ci.yml # CI: runs the tests and executes the notebook
-├── .dockerignore            # Excludes cache, notebooks, and dev files from Docker build
-├── .env                     # Environment variables & database credentials
+├── .dockerignore            # Excludes venv, cache, notebooks, and secrets from Docker build
+├── .env.example             # Example environment variables & database credentials template
 ├── .gitignore
 ├── docker-compose.yml       # Multi-container orchestration (Gunicorn web API + PostgreSQL)
 ├── Dockerfile               # Production container definition (Python 3.12-slim + Gunicorn)
-├── requirements.txt         # Runtime dependencies (pinned)
+├── requirements.txt         # Runtime dependencies (pinned, includes Gunicorn)
 ├── requirements-dev.txt     # Training + testing dependencies (pinned)
 └── README.md
 ```
@@ -53,12 +53,10 @@ cd spam-detector-app
 
 Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/). No local Python or PostgreSQL setup needed.
 
-1. **Configure Environment Variables:**
-   Create a `.env` file in the root directory (or use sample values):
-   ```env
-   DB_USER=postgres
-   DB_PASSWORD=your_password_here
-   DB_NAME=spam_db
+1. **Configure Environment Variables (Optional):**
+   Copy `.env.example` to `.env` if you wish to customize credentials (default fallbacks are already configured):
+   ```bash
+   cp .env.example .env
    ```
 
 2. **Build and Run:**
@@ -137,15 +135,40 @@ jupyter nbconvert --to notebook --execute --inplace notebooks/spam_detection.ipy
 
 ### `GET /`
 
-Health check endpoint.
+Health check endpoint reporting API, model, and database status.
 
 ```json
-{ "status": "ready", "service": "SMS Spam Detector API" }
+{
+  "status": "ready",
+  "service": "SMS Spam Detector API",
+  "model": "loaded",
+  "database": "connected"
+}
 ```
 
 ### `GET /ui`
 
 Serves the built-in frontend single-page interface directly from the Flask server.
+
+### `GET /predictions`
+
+Retrieves logged predictions from PostgreSQL (optional query parameter `?limit=20`, max 100).
+
+```json
+{
+  "count": 1,
+  "predictions": [
+    {
+      "id": 1,
+      "message": "You have won a prize! Call now.",
+      "prediction": "Spam",
+      "confidence": 98.7,
+      "model_version": "v1",
+      "created_at": "2026-10-25T09:30:00"
+    }
+  ]
+}
+```
 
 ### `POST /predict`
 
@@ -209,7 +232,12 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite covers the happy paths plus every documented error condition, including regressions for payloads that previously crashed the API with HTTP 500 (JSON arrays and non-string `message` fields). CI runs the tests and executes the notebook end-to-end on Python 3.12 and 3.13 (`.github/workflows/ci.yml`).
+The suite covers 29 test cases:
+- Model artifacts loading and ML inference happy paths
+- Input validations and malformed payload regression tests (rejecting with 400 instead of 500)
+- Endpoints contract tests (`/`, `/ui`, `/predictions`, `/predict`)
+- Database fault-tolerance (verifying predictions succeed without interruption even if PostgreSQL disconnects)
+- CI runs the tests and executes the notebook end-to-end on Python 3.12 and 3.13 (`.github/workflows/ci.yml`).
 
 ---
 

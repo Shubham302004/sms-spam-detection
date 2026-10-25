@@ -102,7 +102,10 @@ tailwind.config = {
 // Config — override without editing this file by appending ?api=<origin>,
 // e.g. index.html?api=http://192.168.0.10:5000
 // -----------------------------------------------------------------------
-const API_BASE_URL = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:5000";
+const defaultApi = (window.location.origin && window.location.origin !== "null" && !window.location.protocol.startsWith("file"))
+  ? window.location.origin
+  : "http://127.0.0.1:5000";
+const API_BASE_URL = new URLSearchParams(location.search).get("api") || defaultApi;
 
 // Abort the request if the backend does not answer within this many ms.
 const REQUEST_TIMEOUT_MS = 15000;

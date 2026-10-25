@@ -14,7 +14,11 @@ import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import joblib
-import psycopg2
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -35,6 +39,8 @@ DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1")
+
+_table_initialized = False
 
 # ---------------------------------------------------------------------------
 # Model loading
@@ -59,10 +65,56 @@ app = Flask(__name__)
 CORS(app)
 
 
+def check_db_status():
+    """Quick check for PostgreSQL connectivity ('connected', 'disconnected', or 'disabled')."""
+    if not DB_HOST or psycopg2 is None:
+        return "disabled"
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+            user=DB_USER, password=DB_PASSWORD, connect_timeout=2,
+        )
+        conn.close()
+        return "connected"
+    except Exception:
+        return "disconnected"
+
+
+def init_db():
+    """Ensure the predictions table exists in PostgreSQL. Safe to run multiple times."""
+    global _table_initialized
+    if not DB_HOST or psycopg2 is None:
+        return
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+            user=DB_USER, password=DB_PASSWORD, connect_timeout=3,
+        )
+        try:
+            with conn, conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS predictions (
+                        id SERIAL PRIMARY KEY,
+                        message TEXT NOT NULL,
+                        prediction VARCHAR(10) NOT NULL,
+                        confidence REAL NOT NULL,
+                        model_version VARCHAR(50) DEFAULT 'v1',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+            _table_initialized = True
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[WARNING] Could not initialize database table: {exc}", flush=True)
+
+
 def log_prediction(message, prediction, confidence):
     """Save one prediction to PostgreSQL. Never raises, so a DB problem can't break /predict."""
-    if not DB_HOST:
+    if not DB_HOST or psycopg2 is None:
         return
+    if not _table_initialized:
+        init_db()
     try:
         conn = psycopg2.connect(
             host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
@@ -81,16 +133,80 @@ def log_prediction(message, prediction, confidence):
         print(f"[WARNING] Could not log prediction: {exc}", flush=True)
 
 
+# Attempt initial table check at startup
+init_db()
+
+
 @app.route("/")
 def home():
-    status = "ready" if (model and vectorizer) else "model not loaded"
-    return jsonify({"status": status, "service": "SMS Spam Detector API"})
+    model_loaded = bool(model and vectorizer)
+    status = "ready" if model_loaded else "model not loaded"
+    return jsonify({
+        "status": status,
+        "service": "SMS Spam Detector API",
+        "model": "loaded" if model_loaded else "not loaded",
+        "database": check_db_status(),
+    })
 
 
 @app.route("/ui")
 def ui():
     """Serve the frontend page so it can be opened at http://127.0.0.1:5000/ui"""
     return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+@app.route("/predictions", methods=["GET"])
+def get_predictions():
+    """
+    GET /predictions?limit=20
+    Returns recent predictions stored in PostgreSQL.
+    """
+    if not DB_HOST or psycopg2 is None:
+        return jsonify({
+            "predictions": [],
+            "status": "disabled",
+            "message": "Database logging is disabled (DB_HOST not set)."
+        }), 200
+
+    try:
+        limit = min(int(request.args.get("limit", 20)), 100)
+    except ValueError:
+        limit = 20
+
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+            user=DB_USER, password=DB_PASSWORD, connect_timeout=3,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, message, prediction, confidence, model_version, created_at
+                    FROM predictions
+                    ORDER BY id DESC
+                    LIMIT %s
+                """, (limit,))
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        results = [
+            {
+                "id": r[0],
+                "message": r[1],
+                "prediction": r[2],
+                "confidence": r[3],
+                "model_version": r[4],
+                "created_at": r[5].isoformat() if r[5] else None,
+            }
+            for r in rows
+        ]
+        return jsonify({"predictions": results, "count": len(results)})
+    except Exception as exc:
+        return jsonify({
+            "predictions": [],
+            "error": f"Could not retrieve predictions: {exc}"
+        }), 500
 
 
 @app.route("/predict", methods=["POST"])

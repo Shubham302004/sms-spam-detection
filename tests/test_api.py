@@ -36,7 +36,7 @@ def predict(client, payload=None, raw=None, content_type="application/json", hea
 
 
 # --------------------------------------------------------------------------
-# Startup
+# Startup & Health
 # --------------------------------------------------------------------------
 def test_model_artifacts_are_loaded():
     assert app_module.model is not None, "backend/spam_model.pkl failed to load"
@@ -49,6 +49,8 @@ def test_health_endpoint(client):
     body = res.get_json()
     assert body["status"] == "ready"
     assert body["service"] == "SMS Spam Detector API"
+    assert body["model"] == "loaded"
+    assert "database" in body
 
 
 # --------------------------------------------------------------------------
@@ -81,6 +83,25 @@ def test_message_is_trimmed(client):
 def test_cors_header_present(client):
     res = predict(client, {"message": HAM}, headers={"Origin": "http://localhost:3000"})
     assert res.headers.get("Access-Control-Allow-Origin") is not None
+
+
+# --------------------------------------------------------------------------
+# UI & Endpoints
+# --------------------------------------------------------------------------
+def test_ui_endpoint(client):
+    res = client.get("/ui")
+    assert res.status_code == 200
+    assert "text/html" in res.content_type
+    assert b"SMS Spam Detector" in res.data
+
+
+def test_predictions_endpoint_when_db_disabled(client, monkeypatch):
+    monkeypatch.setattr(app_module, "DB_HOST", None)
+    res = client.get("/predictions")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert "predictions" in body
+    assert body["status"] == "disabled"
 
 
 # --------------------------------------------------------------------------
@@ -126,6 +147,38 @@ def test_non_object_bodies_return_400_not_500(client, raw, description):
 def test_message_length_boundary(client):
     assert predict(client, {"message": "a" * 1000}).status_code == 200  # allowed
     assert predict(client, {"message": "a" * 1001}).status_code == 400  # rejected
+
+
+# --------------------------------------------------------------------------
+# Database resilience
+# --------------------------------------------------------------------------
+def test_log_prediction_handles_exceptions_gracefully(monkeypatch):
+    """Database connection drops must never raise an unhandled exception."""
+    monkeypatch.setattr(app_module, "DB_HOST", "invalid-host")
+
+    class FailingPsycopg2:
+        @staticmethod
+        def connect(*args, **kwargs):
+            raise RuntimeError("Database connection refused")
+
+    monkeypatch.setattr(app_module, "psycopg2", FailingPsycopg2)
+    # Must run and complete without raising
+    app_module.log_prediction("Test message", "Spam", 99.0)
+
+
+def test_predict_succeeds_even_when_db_fails(client, monkeypatch):
+    """Predict API must return 200 and ML result even if database is unreachable."""
+    monkeypatch.setattr(app_module, "DB_HOST", "invalid-host")
+
+    class FailingPsycopg2:
+        @staticmethod
+        def connect(*args, **kwargs):
+            raise Exception("Database connection refused")
+
+    monkeypatch.setattr(app_module, "psycopg2", FailingPsycopg2)
+    res = predict(client, {"message": HAM})
+    assert res.status_code == 200
+    assert res.get_json()["prediction"] == "Ham"
 
 
 # --------------------------------------------------------------------------

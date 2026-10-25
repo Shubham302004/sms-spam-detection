@@ -4,3 +4,8 @@ notebooks
 tests
 requirements-dev.txt
 __pycache__
+venv/
+.venv/
+.pytest_cache/
+.env
+.env.*
