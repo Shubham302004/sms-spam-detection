@@ -4,6 +4,7 @@ Run:  python app.py
 Env vars:
   FLASK_DEBUG   - set to "true" to enable debug mode (default: false)
   PORT          - port to listen on (default: 5000)
+  ALLOWED_ORIGINS - comma-separated origins for CORS (default: *)
   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD - PostgreSQL settings
                   (prediction logging is skipped if DB_HOST is not set)
   MODEL_VERSION - label stored with each logged prediction (default: v1)
@@ -17,6 +18,7 @@ import joblib
 
 try:
     import psycopg2
+    from psycopg2 import pool
 except ImportError:
     psycopg2 = None
 
@@ -41,6 +43,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1")
 
 _table_initialized = False
+_db_pool = None
 
 # ---------------------------------------------------------------------------
 # Model loading
@@ -59,25 +62,97 @@ except Exception as exc:
     print(f"[WARNING] Could not load vectorizer from '{VECTORIZER_PATH}': {exc}")
 
 # ---------------------------------------------------------------------------
-# App
+# App & CORS
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
-CORS(app)
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
+if ALLOWED_ORIGINS == "*":
+    CORS(app)
+else:
+    CORS(app, origins=[o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()])
+
+
+# ---------------------------------------------------------------------------
+# Database connection management
+# ---------------------------------------------------------------------------
+def get_db_pool():
+    global _db_pool
+    if not DB_HOST or psycopg2 is None or not hasattr(psycopg2, "pool"):
+        return None
+    if _db_pool is None:
+        try:
+            _db_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=1,
+                maxconn=10,
+                host=DB_HOST,
+                port=DB_PORT,
+                dbname=DB_NAME,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                connect_timeout=3,
+            )
+        except Exception as exc:
+            print(f"[WARNING] Could not create database connection pool: {exc}", flush=True)
+            _db_pool = None
+    return _db_pool
+
+
+def get_db_connection():
+    """Acquires a connection from the pool, or falls back to direct connect."""
+    if not DB_HOST or psycopg2 is None:
+        return None, False
+    pool_obj = get_db_pool()
+    if pool_obj:
+        try:
+            return pool_obj.getconn(), True
+        except Exception:
+            pass
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        connect_timeout=3,
+    )
+    return conn, False
+
+
+def release_db_connection(conn, from_pool=False):
+    """Safely returns a connection to the pool or closes it."""
+    if not conn:
+        return
+    pool_obj = get_db_pool()
+    if from_pool and pool_obj:
+        try:
+            pool_obj.putconn(conn)
+            return
+        except Exception:
+            pass
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 def check_db_status():
     """Quick check for PostgreSQL connectivity ('connected', 'disconnected', or 'disabled')."""
     if not DB_HOST or psycopg2 is None:
         return "disabled"
+    conn_tuple = None
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
-            user=DB_USER, password=DB_PASSWORD, connect_timeout=2,
-        )
-        conn.close()
+        conn_tuple = get_db_connection()
+        if not conn_tuple or not conn_tuple[0]:
+            return "disconnected"
+        conn, from_pool = conn_tuple
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1;")
         return "connected"
     except Exception:
         return "disconnected"
+    finally:
+        if conn_tuple:
+            release_db_connection(conn_tuple[0], conn_tuple[1])
 
 
 def init_db():
@@ -85,11 +160,12 @@ def init_db():
     global _table_initialized
     if not DB_HOST or psycopg2 is None:
         return
+    conn_tuple = None
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
-            user=DB_USER, password=DB_PASSWORD, connect_timeout=3,
-        )
+        conn_tuple = get_db_connection()
+        if not conn_tuple or not conn_tuple[0]:
+            return
+        conn, from_pool = conn_tuple
         try:
             with conn, conn.cursor() as cur:
                 cur.execute("""
@@ -104,7 +180,7 @@ def init_db():
                 """)
             _table_initialized = True
         finally:
-            conn.close()
+            release_db_connection(conn, from_pool)
     except Exception as exc:
         print(f"[WARNING] Could not initialize database table: {exc}", flush=True)
 
@@ -115,11 +191,12 @@ def log_prediction(message, prediction, confidence):
         return
     if not _table_initialized:
         init_db()
+    conn_tuple = None
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
-            user=DB_USER, password=DB_PASSWORD, connect_timeout=3,
-        )
+        conn_tuple = get_db_connection()
+        if not conn_tuple or not conn_tuple[0]:
+            return
+        conn, from_pool = conn_tuple
         try:
             with conn, conn.cursor() as cur:  # "with conn" commits the transaction
                 cur.execute(
@@ -128,7 +205,7 @@ def log_prediction(message, prediction, confidence):
                     (message, prediction, confidence, MODEL_VERSION),
                 )
         finally:
-            conn.close()
+            release_db_connection(conn, from_pool)
     except Exception as exc:
         print(f"[WARNING] Could not log prediction: {exc}", flush=True)
 
@@ -137,8 +214,15 @@ def log_prediction(message, prediction, confidence):
 init_db()
 
 
+# ---------------------------------------------------------------------------
+# HTTP Endpoints
+# ---------------------------------------------------------------------------
 @app.route("/")
 def home():
+    accept = request.headers.get("Accept", "")
+    if "text/html" in accept and not accept.startswith("application/json"):
+        return send_from_directory(FRONTEND_DIR, "index.html")
+
     model_loaded = model is not None and vectorizer is not None
     status = "ready" if model_loaded else "model not loaded"
     return jsonify({
@@ -173,11 +257,15 @@ def get_predictions():
     except (ValueError, TypeError):
         limit = 20
 
+    conn_tuple = None
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
-            user=DB_USER, password=DB_PASSWORD, connect_timeout=3,
-        )
+        conn_tuple = get_db_connection()
+        if not conn_tuple or not conn_tuple[0]:
+            return jsonify({
+                "predictions": [],
+                "error": "Could not connect to database."
+            }), 500
+        conn, from_pool = conn_tuple
         try:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -188,7 +276,7 @@ def get_predictions():
                 """, (limit,))
                 rows = cur.fetchall()
         finally:
-            conn.close()
+            release_db_connection(conn, from_pool)
 
         results = [
             {

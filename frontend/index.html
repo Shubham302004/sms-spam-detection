@@ -190,9 +190,31 @@ function addHistoryEntry(prediction, confidence, text) {
   historyList.prepend(renderHistoryItem(items[0]));
 }
 
-function loadHistory() {
+async function loadHistory() {
   historyList.innerHTML = "";
-  readHistory().forEach((item) => historyList.appendChild(renderHistoryItem(item)));
+  const localItems = readHistory();
+  localItems.forEach((item) => historyList.appendChild(renderHistoryItem(item)));
+
+  try {
+    const res = await fetch(\/predictions?limit=\);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.predictions) && data.predictions.length > 0) {
+        historyList.innerHTML = "";
+        data.predictions.forEach((row) => {
+          historyList.appendChild(
+            renderHistoryItem({
+              prediction: row.prediction,
+              confidence: row.confidence,
+              text: row.message.length > 80 ? row.message.slice(0, 80) + "…" : row.message,
+            })
+          );
+        });
+      }
+    }
+  } catch {
+    // If backend /predictions is not reachable or disabled, local storage remains visible
+  }
 }
 
 function clearHistory() {
@@ -214,6 +236,13 @@ function setResultState(title, body, colorClass) {
 // Events
 // -----------------------------------------------------------------------
 messageInput.addEventListener("input", updateCharCount);
+
+messageInput.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    analyzeBtn.click();
+  }
+});
 
 analyzeBtn.addEventListener("click", async () => {
   const msg = messageInput.value.trim();

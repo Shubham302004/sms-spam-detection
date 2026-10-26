@@ -207,3 +207,19 @@ def test_returns_503_when_vectorizer_missing(client, monkeypatch):
 def test_unknown_route_returns_404(client):
     res = client.get("/does-not-exist")
     assert res.status_code == 404
+
+def test_home_serves_html_for_browser_requests(client):
+    res = client.get("/", headers={"Accept": "text/html,application/xhtml+xml"})
+    assert res.status_code == 200
+    assert "text/html" in res.content_type
+    assert b"SMS Spam Detector" in res.data
+
+
+@pytest.mark.parametrize("limit", ["-5", "0", "150", "invalid_number"])
+def test_predictions_limit_boundaries(client, monkeypatch, limit):
+    monkeypatch.setattr(app_module, "DB_HOST", None)
+    res = client.get(f"/predictions?limit={limit}")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert "predictions" in body
+

@@ -24,7 +24,7 @@ spam-detector-app/
 │   ├── spam_detection.ipynb # Model training, evaluation & artifact export
 │   └── spam.csv             # UCI SMS Spam Collection dataset
 ├── tests/
-│   └── test_api.py          # API contract & integration tests (30 cases)
+│   └── test_api.py          # API contract & integration tests (35 cases)
 ├── .github/workflows/ci.yml # CI: runs the tests and executes the notebook
 ├── .dockerignore            # Excludes venv, cache, notebooks, and secrets from Docker build
 ├── .env.example             # Example environment variables & database credentials template
@@ -232,7 +232,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite covers 30 test cases:
+The suite covers 35 test cases:
 - Model artifacts loading and ML inference happy paths
 - Input validations and malformed payload regression tests (rejecting with 400 instead of 500)
 - Endpoints contract tests (`/`, `/ui`, `/predictions`, `/predict`)
