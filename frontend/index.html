@@ -55,13 +55,14 @@ tailwind.config = {
 
   <div class="flex items-center justify-between mt-1">
     <div class="flex gap-3">
-      <button onclick="setSpam()" class="px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition">Spam Example</button>
-      <button onclick="setHam()"  class="px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition">Ham Example</button>
+      <button type="button" onclick="setSpam()" class="px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition">Spam Example</button>
+      <button type="button" onclick="setHam()"  class="px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition">Ham Example</button>
     </div>
     <span id="char-count" class="text-xs text-gray-400">0 / 1000</span>
   </div>
 
   <button
+    type="button"
     id="analyze-btn"
     class="mt-8 py-4 rounded-full bg-black text-white text-lg font-semibold shadow-lg hover:bg-gray-800 transition disabled:opacity-50">
     Analyze Message
@@ -85,7 +86,7 @@ tailwind.config = {
   <!-- HISTORY -->
   <div class="flex items-center justify-between text-sm text-gray-500">
     <span class="font-semibold">RECENT HISTORY</span>
-    <button onclick="clearHistory()" class="text-black hover:underline">Clear All</button>
+    <button type="button" onclick="clearHistory()" class="text-black hover:underline">Clear All</button>
   </div>
 
   <div class="flex-1 overflow-y-auto border rounded-2xl">

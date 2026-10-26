@@ -104,6 +104,13 @@ def test_predictions_endpoint_when_db_disabled(client, monkeypatch):
     assert body["status"] == "disabled"
 
 
+def test_predictions_limit_query_param_sanitized(client, monkeypatch):
+    monkeypatch.setattr(app_module, "DB_HOST", None)
+    for invalid_limit in ["-5", "0", "abc", "9999"]:
+        res = client.get(f"/predictions?limit={invalid_limit}")
+        assert res.status_code == 200
+
+
 # --------------------------------------------------------------------------
 # Validation — every one of these must be a 400, never a 500
 # --------------------------------------------------------------------------

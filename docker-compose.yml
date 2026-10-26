@@ -13,7 +13,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       MODEL_VERSION: v1
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   db:
@@ -25,6 +26,11 @@ services:
       POSTGRES_DB: ${DB_NAME:-spam_db}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-spam_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
 volumes:

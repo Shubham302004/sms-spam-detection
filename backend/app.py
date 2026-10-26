@@ -50,13 +50,13 @@ vectorizer = None
 
 try:
     model = joblib.load(MODEL_PATH)
-except FileNotFoundError:
-    print(f"[WARNING] Model file not found at '{MODEL_PATH}'. Run the notebook to generate it.")
+except Exception as exc:
+    print(f"[WARNING] Could not load model from '{MODEL_PATH}': {exc}")
 
 try:
     vectorizer = joblib.load(VECTORIZER_PATH)
-except FileNotFoundError:
-    print(f"[WARNING] Vectorizer file not found at '{VECTORIZER_PATH}'. Run the notebook to generate it.")
+except Exception as exc:
+    print(f"[WARNING] Could not load vectorizer from '{VECTORIZER_PATH}': {exc}")
 
 # ---------------------------------------------------------------------------
 # App
@@ -139,7 +139,7 @@ init_db()
 
 @app.route("/")
 def home():
-    model_loaded = bool(model and vectorizer)
+    model_loaded = model is not None and vectorizer is not None
     status = "ready" if model_loaded else "model not loaded"
     return jsonify({
         "status": status,
@@ -169,8 +169,8 @@ def get_predictions():
         }), 200
 
     try:
-        limit = min(int(request.args.get("limit", 20)), 100)
-    except ValueError:
+        limit = max(1, min(int(request.args.get("limit", 20)), 100))
+    except (ValueError, TypeError):
         limit = 20
 
     try:
@@ -216,7 +216,7 @@ def predict():
     Body: { "message": "<sms text>" }
     Returns: { "message", "prediction", "confidence" }
     """
-    if not model or not vectorizer:
+    if model is None or vectorizer is None:
         return jsonify({"error": "Model or vectorizer not loaded on the server."}), 503
 
     # NOTE: `request.get_json` also accepts JSON arrays/strings/numbers, so the
